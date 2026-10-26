@@ -237,9 +237,23 @@ function renderJob(job) {
   return card;
 }
 
+function showBanner(message) {
+  const box = $("banner");
+  box.replaceChildren();
+  box.append(document.createTextNode(message));
+  const retry = el("button", "", "Retry");
+  retry.onclick = () => {
+    box.style.display = "none";
+    refresh();
+  };
+  box.append(retry);
+  box.style.display = "flex";
+}
+
 async function refresh() {
   try {
     const [jobs, stats] = await Promise.all([read("list_jobs", [0, 30]), read("stats", [])]);
+    $("banner").style.display = "none";
     renderStats(stats || {});
     const host = $("jobs");
     host.replaceChildren();
@@ -251,7 +265,13 @@ async function refresh() {
     for (const job of jobs || []) host.append(renderJob(job));
     $("jobsub").textContent = `${(jobs || []).length} on this contract, newest first.`;
   } catch (e) {
-    log(`read failed: ${String((e && e.message) || e).slice(0, 160)}`);
+    const message = String((e && e.message) || e);
+    if (/rate limit/i.test(message)) {
+      showBanner("The public Studio RPC is rate limited right now, so the review list could not be read. The reviews are on chain, not in this tab.");
+    } else {
+      showBanner(`Could not read the contract: ${message.slice(0, 140)}`);
+    }
+    log("read failed, see the banner above");
   }
 }
 
@@ -279,4 +299,4 @@ $("create").onclick = async () => {
 };
 
 refresh();
-setInterval(refresh, 25000);
+setInterval(refresh, 45000);
