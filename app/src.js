@@ -250,24 +250,53 @@ function showBanner(message) {
   box.style.display = "flex";
 }
 
+const CACHE = "glossaryguard.lastread";
+
+function saveCache(jobs, stats) {
+  try {
+    localStorage.setItem(CACHE, JSON.stringify({ at: Date.now(), jobs, stats }));
+  } catch {}
+}
+
+function loadCache() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(CACHE) || "null");
+    return raw && Array.isArray(raw.jobs) ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+function paintJobs(jobs, note) {
+  const host = $("jobs");
+  host.replaceChildren();
+  if (!jobs || !jobs.length) {
+    const empty = el("div", "card");
+    empty.append(el("div", "hint", "No review yet. Fill the sample and create one."));
+    host.append(empty);
+  }
+  for (const job of jobs || []) host.append(renderJob(job));
+  $("jobsub").textContent = note || `${(jobs || []).length} on this contract, newest first.`;
+}
+
 async function refresh() {
   try {
     const [jobs, stats] = await Promise.all([read("list_jobs", [0, 30]), read("stats", [])]);
     $("banner").style.display = "none";
+    saveCache(jobs || [], stats || {});
     renderStats(stats || {});
-    const host = $("jobs");
-    host.replaceChildren();
-    if (!jobs || !jobs.length) {
-      const empty = el("div", "card");
-      empty.append(el("div", "hint", "No review yet. Fill the sample and create one."));
-      host.append(empty);
-    }
-    for (const job of jobs || []) host.append(renderJob(job));
-    $("jobsub").textContent = `${(jobs || []).length} on this contract, newest first.`;
+    paintJobs(jobs);
   } catch (e) {
     const message = String((e && e.message) || e);
-    if (/rate limit/i.test(message)) {
-      showBanner("The public Studio RPC is rate limited right now, so the review list could not be read. The reviews are on chain, not in this tab.");
+    const cached = loadCache();
+    if (cached) {
+      renderStats(cached.stats || {});
+      paintJobs(cached.jobs, `showing what the chain returned at ${new Date(cached.at).toLocaleTimeString()} — the live read is refused right now`);
+    }
+    if (/rate limit|failed to fetch|unknown rpc/i.test(message)) {
+      showBanner(
+        "The public Studio RPC is refusing reads right now (it allows 500 requests an hour), so this page is showing the last state it read. Nothing is lost: every review and check is on chain. Press Retry in a minute."
+      );
     } else {
       showBanner(`Could not read the contract: ${message.slice(0, 140)}`);
     }
@@ -298,5 +327,15 @@ $("create").onclick = async () => {
   }
 };
 
-refresh();
-setInterval(refresh, 45000);
+setInterval(() => {
+  if (document.visibilityState === "visible") refresh();
+}, 45000);
+
+(async () => {
+  const cached = loadCache();
+  if (cached) {
+    renderStats(cached.stats || {});
+    paintJobs(cached.jobs, `last read at ${new Date(cached.at).toLocaleTimeString()}`);
+  }
+  refresh();
+})();
