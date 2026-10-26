@@ -1,0 +1,11 @@
+node_modules/
+__pycache__/
+*.pyc
+artifacts/
+.deploy-keys.json
+.e2e-keys.json
+.pytest_cache/
+__pycache__/
+*.pyc
+scripts/.e2e-keys.json
+app/bundle.js

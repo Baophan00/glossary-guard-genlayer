@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>GlossaryGuard — which glossary terms the translation missed, on chain</title>
+<meta name="description" content="Paste a source text, its translation and a glossary. GenLayer validators agree on which terms are missing, and the contract grades the result by code." />
+<style>
+  :root{
+    --bg:#f5f6f8; --card:#ffffff; --ink:#1c2430; --muted:#697586; --line:#e2e6ec;
+    --accent:#2f5fd0; --ok:#1f7a4d; --warn:#9a5b00; --bad:#a32b2b;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  a{color:var(--accent);text-decoration:none} a:hover{text-decoration:underline}
+  .wrap{max-width:1120px;margin:0 auto;padding:26px 20px 80px}
+  header.top{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:20px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:650;letter-spacing:-.01em;font-size:19px}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--ok)}
+  .chips{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .chip{border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 12px;font-size:12.5px;color:var(--muted)}
+  .chip b{color:var(--ink);font-weight:600}
+  h2{font-size:15px;font-weight:650;margin:0 0 4px}
+  .sub{color:var(--muted);font-size:13px;margin:0 0 14px}
+  .grid{display:grid;grid-template-columns:1fr 330px;gap:18px;align-items:start}
+  @media(max-width:920px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px}
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px}
+  .stat{background:#fff;border:1px solid var(--line);border-radius:10px;padding:11px 13px}
+  .stat span{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+  .stat b{font-size:19px;font-weight:650}
+  label{display:block;font-size:12.5px;color:var(--muted);margin:10px 0 4px}
+  input,textarea,select{width:100%;border:1px solid var(--line);border-radius:8px;padding:9px 11px;
+    font:inherit;color:var(--ink);background:#fff}
+  textarea{min-height:70px;resize:vertical}
+  textarea.mono{font:12.5px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace}
+  input:focus,textarea:focus,select:focus{outline:2px solid #cdd9f5;border-color:#b9c9ee}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  @media(max-width:700px){.row{grid-template-columns:1fr}}
+  button{font:inherit;border-radius:8px;border:1px solid var(--line);background:#fff;color:var(--ink);
+    padding:9px 13px;cursor:pointer}
+  button:hover{border-color:#c9d2e2}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  button.small{padding:6px 10px;font-size:13px}
+  .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center}
+  .job{border:1px solid var(--line);border-radius:12px;background:#fff;padding:16px;margin-bottom:12px}
+  .job h3{margin:0 0 6px;font-size:15px;font-weight:650}
+  .meta{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px}
+  .pill{font-size:11.5px;padding:3px 9px;border-radius:999px;border:1px solid var(--line);color:var(--muted);background:#fbfcfd}
+  .pill.pass{color:var(--ok);border-color:#cfe8db;background:#f1faf5}
+  .pill.minor{color:var(--warn);border-color:#f0dfc2;background:#fdf8ef}
+  .pill.fail{color:var(--bad);border-color:#f0cfd0;background:#fdf1f1}
+  .pill.ok{color:var(--ok);border-color:#cfe8db;background:#f1faf5}
+  .pill.awkward{color:var(--warn);border-color:#f0dfc2;background:#fdf8ef}
+  .pill.broken{color:var(--bad);border-color:#f0cfd0;background:#fdf1f1}
+  .kv{font-size:13px;color:var(--muted);margin:3px 0}
+  .kv b{color:var(--ink);font-weight:600}
+  table.terms{width:100%;border-collapse:collapse;margin:10px 0 4px;font-size:13px}
+  table.terms th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);
+    font-weight:600;padding:4px 6px;border-bottom:1px solid var(--line)}
+  table.terms td{padding:5px 6px;border-bottom:1px solid #f1f3f6;vertical-align:top}
+  table.terms tr.miss td{color:var(--bad)}
+  .tag{margin-left:6px;font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;border:1px solid #f0cfd0;
+    background:#fdf1f1;color:var(--bad);border-radius:999px;padding:1px 6px;white-space:nowrap}
+  .tag.ok{border-color:#cfe8db;background:#f1faf5;color:var(--ok)}
+  .texts{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+  @media(max-width:700px){.texts{grid-template-columns:1fr}}
+  .textbox{border:1px solid var(--line);border-radius:8px;padding:9px 11px;background:#fafbfc;font-size:13px}
+  .textbox span{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:3px}
+  .reason{margin-top:10px;border-left:3px solid var(--line);padding:8px 12px;background:#fafbfc;
+    border-radius:0 8px 8px 0;font-size:13.5px}
+  .history{margin-top:10px;border-top:1px dashed var(--line);padding-top:8px;font-size:12.5px;color:var(--muted)}
+  .history .line{padding:2px 0}
+  #log{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:#1c2430;color:#fff;
+    padding:10px 16px;border-radius:10px;font-size:13px;display:none;max-width:90vw;z-index:9}
+  .hint{font-size:12.5px;color:var(--muted);line-height:1.5}
+  .num{font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand"><span class="dot"></span> GlossaryGuard</div>
+    <div class="chips">
+      <span class="chip">Network <b>Studio</b></span>
+      <a class="chip" id="contractlink" href="#" target="_blank" rel="noreferrer">contract</a>
+      <span class="chip" id="walletchip">No key</span>
+    </div>
+  </header>
+
+  <div class="grid">
+    <main>
+      <div class="stats" id="stats"></div>
+
+      <section class="card">
+        <h2>Review a translation</h2>
+        <p class="sub">One term per line as <b>source =&gt; required translation</b>. Validators agree on which numbers the translation missed; the contract sets the grade.</p>
+        <label for="src">Source text</label>
+        <textarea id="src" placeholder="Add the item to your cart, continue to checkout, and you will get an invoice by email."></textarea>
+        <div class="row">
+          <div>
+            <label for="tgt">Translation</label>
+            <textarea id="tgt" placeholder="Thêm sản phẩm vào giỏ hàng, tiếp tục thanh toán và bạn sẽ nhận được hoá đơn qua email."></textarea>
+          </div>
+          <div>
+            <label for="gloss">Glossary</label>
+            <textarea id="gloss" class="mono" placeholder="cart => giỏ hàng&#10;checkout => thanh toán&#10;invoice => hoá đơn"></textarea>
+          </div>
+        </div>
+        <div class="actions">
+          <button class="primary" id="create">Create review</button>
+          <button class="small" id="sample">Fill a sample</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>Reviews</h2>
+        <p class="sub" id="jobsub">Every review on this contract, newest first.</p>
+        <div id="jobs"></div>
+      </section>
+    </main>
+
+    <aside>
+      <section class="card">
+        <h2>Acting as</h2>
+        <p class="sub">Keys live in this browser only.</p>
+        <select id="acting"></select>
+        <div class="actions">
+          <button class="small" id="genkey">New key</button>
+          <button class="small" id="importkey">Import key</button>
+        </div>
+        <div class="kv" style="margin-top:10px">address <b id="addr">no key yet</b></div>
+      </section>
+
+      <section class="card">
+        <h2>What the validators agree on</h2>
+        <p class="hint">
+          The model reads the source, the translation and the numbered glossary, and answers
+          <i>which numbers the translation gets wrong or leaves out</i> plus one fluency word.
+          The equivalence principle compares that set of numbers and that word, nothing else, so two
+          validators may explain themselves differently and still agree.
+        </p>
+        <p class="hint" style="margin-top:10px">
+          The grade is computed in the contract: no violations and fluent is <b>pass</b>, up to two
+          violations is <b>minor</b>, anything else is <b>fail</b>. A stricter or friendlier reader can
+          change a label, never the count.
+        </p>
+      </section>
+    </aside>
+  </div>
+</div>
+<div id="log"></div>
+<script src="./bundle.js"></script>
+</body>
+</html>

@@ -1,0 +1,18 @@
+{
+  "name": "glossary-guard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Translation QA against a glossary: validators name the term ids a translation got wrong, the contract grades.",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "python -m pytest tests/direct -q",
+    "deploy": "node scripts/deploy_studionet.js",
+    "e2e": "node scripts/e2e_studionet.js"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "genlayer-js": "1.1.8"
+  }
+}
