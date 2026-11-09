@@ -103,6 +103,12 @@ const TRANSLATION = [
   "Bạn có thể trả lại tiền trong vòng 30 ngày kể từ khi nhận hàng.",
 ].join(" ");
 
+// The rewrite a translator would send back: every glossary term rendered exactly.
+const REVISED = [
+  "Thêm sản phẩm vào giỏ hàng, tiếp tục thanh toán và bạn sẽ nhận được hoá đơn qua email.",
+  "Bạn có thể hoàn tiền trong vòng 30 ngày kể từ khi nhận hàng.",
+].join(" ");
+
 // Two terms are rendered as required (1, 2); two are not (3, 4).
 const GLOSSARY = [
   "checkout => thanh toán",
@@ -153,7 +159,39 @@ const GLOSSARY = [
   const cleared = await read("is_cleared", [jobId]);
   console.log(`  is_cleared: ${cleared}`);
 
+  if (job.grade !== "pass") {
+    console.log("\n[owner] revise_job with a page that renders every glossary term");
+    const t1 = Date.now();
+    await write(ownerClient, "owner", "revise_job", [jobId, REVISED]);
+    console.log(`  revision round took ${Math.round((Date.now() - t1) / 1000)}s`);
+
+    job = await read("get_job", [jobId]);
+    console.log(`  revisions ${job.revisions} | checks ${job.checks}`);
+    console.log(`  fixed by this rewrite: [${job.last_fixed.join(", ")}]`);
+    console.log(`  still missing: [${job.last_remaining.join(", ")}]`);
+    console.log(`  newly broken: [${job.last_introduced.join(", ")}]`);
+    console.log(`  grade ${job.grade} | cleared ${job.cleared} | can_revise ${job.can_revise}`);
+
+    if (job.revisions !== 1) throw new Error(`expected one revision, got ${job.revisions}`);
+    if (job.checks !== 2) throw new Error(`expected two stored checks, got ${job.checks}`);
+    if (job.target_text !== REVISED) throw new Error("the revision was not stored");
+    if (job.last_fixed.length === 0 && job.grade !== "pass") {
+      throw new Error("a rewrite that changed the page fixed nothing");
+    }
+
+    console.log("\n[guard] a stranger tries to revise the same page");
+    const stranger = await send(reviewerClient, "reviewer", "revise_job", [jobId, REVISED + " "]);
+    if (!stranger.refused) throw new Error("a stranger was allowed to revise the page");
+
+    console.log("\n[guard] the owner sends the identical text again");
+    const same = await send(ownerClient, "owner", "revise_job", [jobId, REVISED]);
+    if (!same.refused) throw new Error("an identical revision was accepted");
+    const after = await read("get_job", [jobId]);
+    if (after.revisions !== 1) throw new Error("a refused revision moved the job");
+  }
+
   console.log("\n[guard] the same job id again");
+  const beforeDuplicate = await read("get_job", [jobId]);
   const { refused: reverted } = await send(ownerClient, "owner", "create_job", [
     jobId,
     SOURCE,
@@ -163,7 +201,9 @@ const GLOSSARY = [
   if (!reverted) throw new Error("a duplicate job id was accepted");
   job = await read("get_job", [jobId]);
   console.log(`  after the refusal: checks ${job.checks} | grade ${job.grade}`);
-  if (job.checks !== 1) throw new Error("a refused create moved the job");
+  if (job.checks !== beforeDuplicate.checks || job.grade !== beforeDuplicate.grade) {
+    throw new Error("a refused create moved the job");
+  }
 
   console.log("\nhistory");
   for (const check of await read("checks_of", [jobId])) {
@@ -177,7 +217,7 @@ const GLOSSARY = [
   console.log(JSON.stringify(await read("stats", []), null, 2));
 
   console.log(
-    "\nRESULT: one job created, one consensus round stored, grade computed from the reported set, duplicate id refused"
+    "\nRESULT: one job created, a review round stored, the owner's rewrite read by a second round that reports which terms it fixed and which are still missing, a stranger and an identical rewrite refused, duplicate id refused"
   );
 })().catch((e) => {
   console.error("\nFAILED:", e.message);

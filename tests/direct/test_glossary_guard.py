@@ -534,7 +534,7 @@ class TestGuards:
         new_job(contract, direct_vm, direct_alice)
 
         run_check(contract, direct_vm, direct_alice, answer([1, 2, 3], "broken"))
-        direct_vm.warp("2026-11-02T09:00:00Z")
+        direct_vm.warp("2026-12-02T09:00:00Z")
         run_check(contract, direct_vm, direct_alice, answer([1, 2], "awkward"))
         run_check(contract, direct_vm, direct_alice, answer([], "ok"))
 
@@ -647,3 +647,133 @@ class TestJobList:
         assert [j["id"] for j in contract.list_jobs(0, 2)] == ["j-2", "j-1"]
         assert [j["id"] for j in contract.list_jobs(2, 2)] == ["j-0"]
         assert contract.list_jobs(9, 2) == []
+
+REVISED = (
+    "Thêm sản phẩm vào giỏ hàng và tiếp tục thanh toán để nhận hoá đơn. "
+    "Có thể hoàn tiền trong 30 ngày."
+)
+
+
+def revise(contract, direct_vm, sender, payload, text=REVISED, job_id="page-1"):
+    direct_vm.clear_mocks()
+    mock(direct_vm, payload)
+    direct_vm.sender = sender
+    return contract.revise_job(job_id, text)
+
+
+class TestRevision:
+    def test_a_rewrite_reports_what_it_fixed(self, direct_vm, direct_deploy, direct_alice):
+        contract = deploy(direct_deploy)
+        new_job(contract, direct_vm, direct_alice)
+        run_check(contract, direct_vm, direct_alice, answer([1, 3], "awkward"))
+
+        out = revise(contract, direct_vm, direct_alice, answer([3], "awkward"))
+
+        assert out["revision"] == 1
+        assert out["fixed"] == [1]
+        assert out["remaining"] == [3]
+        assert out["introduced"] == []
+        assert out["grade"] == "minor"
+        job = contract.get_job("page-1")
+        assert job["target_text"] == REVISED
+        assert job["revisions"] == 1
+        assert job["can_revise"] is True
+        assert job["last_fixed"] == [1]
+        assert job["last_remaining"] == [3]
+
+    def test_a_rewrite_that_breaks_a_new_term_says_so(
+        self, direct_vm, direct_deploy, direct_alice
+    ):
+        contract = deploy(direct_deploy)
+        new_job(contract, direct_vm, direct_alice)
+        run_check(contract, direct_vm, direct_alice, answer([4], "awkward"))
+
+        out = revise(contract, direct_vm, direct_alice, answer([2], "awkward"))
+
+        assert out["fixed"] == [4]
+        assert out["introduced"] == [2]
+        assert out["remaining"] == [2]
+
+    def test_a_clean_rewrite_clears_the_job(self, direct_vm, direct_deploy, direct_alice):
+        contract = deploy(direct_deploy)
+        new_job(contract, direct_vm, direct_alice)
+        run_check(contract, direct_vm, direct_alice, answer([2, 4], "awkward"))
+
+        out = revise(contract, direct_vm, direct_alice, answer([], "ok"))
+
+        assert out["grade"] == "pass"
+        assert out["cleared"] is True
+        assert out["fixed"] == [2, 4]
+        assert out["remaining"] == []
+        job = contract.get_job("page-1")
+        assert job["cleared"] is True
+        assert job["cleared_at"] > 0
+        assert job["can_revise"] is False
+        assert contract.is_cleared("page-1") is True
+        assert job["checks"] == 2
+
+    def test_a_page_must_be_reviewed_before_it_is_revised(
+        self, direct_vm, direct_deploy, direct_alice
+    ):
+        contract = deploy(direct_deploy)
+        new_job(contract, direct_vm, direct_alice)
+        direct_vm.sender = direct_alice
+
+        with direct_vm.expect_revert("review the page before revising it"):
+            contract.revise_job("page-1", REVISED)
+
+    def test_only_the_owner_revises(self, direct_vm, direct_deploy, direct_alice, direct_bob):
+        contract = deploy(direct_deploy)
+        new_job(contract, direct_vm, direct_alice)
+        run_check(contract, direct_vm, direct_alice, answer([1], "awkward"))
+
+        with direct_vm.expect_revert("only the job owner can revise the page"):
+            revise(contract, direct_vm, direct_bob, answer([], "ok"))
+
+    def test_an_identical_rewrite_is_refused(self, direct_vm, direct_deploy, direct_alice):
+        contract = deploy(direct_deploy)
+        new_job(contract, direct_vm, direct_alice)
+        run_check(contract, direct_vm, direct_alice, answer([1], "awkward"))
+
+        with direct_vm.expect_revert("identical to the current translation"):
+            revise(contract, direct_vm, direct_alice, answer([], "ok"), text=TARGET)
+
+    def test_a_cleared_job_has_nothing_to_revise(self, direct_vm, direct_deploy, direct_alice):
+        contract = deploy(direct_deploy)
+        new_job(contract, direct_vm, direct_alice)
+        run_check(contract, direct_vm, direct_alice, answer([], "ok"))
+        assert contract.is_cleared("page-1") is True
+
+        with direct_vm.expect_revert("already cleared"):
+            revise(contract, direct_vm, direct_alice, answer([], "ok"))
+
+    def test_revisions_are_capped(self, direct_vm, direct_deploy, direct_alice):
+        contract = deploy(direct_deploy)
+        new_job(contract, direct_vm, direct_alice)
+        run_check(contract, direct_vm, direct_alice, answer([1], "awkward"))
+
+        for n in range(8):
+            out = revise(
+                contract, direct_vm, direct_alice, answer([1], "awkward"),
+                text=f"{REVISED} (rewrite {n + 1})",
+            )
+            assert out["revision"] == n + 1
+
+        with direct_vm.expect_revert("has used its 8 revisions"):
+            revise(contract, direct_vm, direct_alice, answer([], "ok"),
+                   text=f"{REVISED} (one too many)")
+        assert contract.get_job("page-1")["can_revise"] is False
+
+    def test_a_broken_answer_stores_no_revision(self, direct_vm, direct_deploy, direct_alice):
+        contract = deploy(direct_deploy)
+        new_job(contract, direct_vm, direct_alice)
+        run_check(contract, direct_vm, direct_alice, answer([1], "awkward"))
+
+        with direct_vm.expect_revert("does not exist in this job"):
+            revise(contract, direct_vm, direct_alice, answer([9], "ok"))
+
+        job = contract.get_job("page-1")
+        assert job["revisions"] == 0
+        assert job["checks"] == 1
+        assert job["target_text"] == TARGET
+        assert job["violations"] == [1]

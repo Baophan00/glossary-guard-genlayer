@@ -2,7 +2,7 @@ import { createClient, createAccount, generatePrivateKey } from "genlayer-js";
 import { studionet } from "genlayer-js/chains";
 import { SNAPSHOT } from "./snapshot";
 
-const CONTRACT = "0x39DdFaEbcFcDEA9973eA5dE4eF5A615DDE767eBb";
+const CONTRACT = "0xae20662CA421F3e171324b6cffdecB18e6579705";
 const EXPLORER = `https://explorer-studio.genlayer.com/address/${CONTRACT}`;
 const KEY_SLOT = "glossaryguard.keys";
 
@@ -229,12 +229,31 @@ function renderJob(job) {
       card.append(reason);
     }
   }
+  if (job.revisions) {
+    const fixed = (job.last_fixed || []).length ? job.last_fixed.join(", ") : "none";
+    const still = (job.last_remaining || []).length ? job.last_remaining.join(", ") : "none";
+    const broke = (job.last_introduced || []).length ? job.last_introduced.join(", ") : "none";
+    card.append(el("div", "kv", `revision ${job.revisions} · fixed ${fixed} · still wrong ${still} · newly broken ${broke}`));
+  }
+  if (job.cleared) card.append(el("div", "kv", "cleared by a round with no missing terms and clean prose"));
   card.append(renderTexts(job));
 
   const actions = el("div", "actions");
   actions.append(actionButton(job.checks ? "Run another check" : "Run the check", "primary", () => send("check_job", [job.id])));
   actions.append(actionButton("History", "", () => loadHistory(card, job.id)));
   card.append(actions);
+
+  if (job.can_revise && job.owner === me) {
+    const box = el("div", "revise");
+    const area = el("textarea");
+    area.value = job.target_text;
+    area.rows = 4;
+    area.style.width = "100%";
+    box.append(el("div", "kv", "the glossary stays fixed; the contract reports which terms this rewrite fixed"));
+    box.append(area);
+    box.append(actionButton("Submit revision", "primary", () => send("revise_job", [job.id, area.value])));
+    card.append(box);
+  }
   return card;
 }
 

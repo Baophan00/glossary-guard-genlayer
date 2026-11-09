@@ -48,6 +48,7 @@ MAX_TERM_CHARS = 80
 MAX_TEXT_CHARS = 4000
 MAX_JOB_ID_CHARS = 64
 MAX_REASON_CHARS = 400
+MAX_REVISIONS = 8      # a page that needs more than eight rewrites is not a wording problem
 FLUENCY = ("ok", "awkward", "broken")
 PASS, MINOR, FAIL = "pass", "minor", "fail"
 
@@ -68,6 +69,8 @@ class Job:
     violation_count: u256
     reason: str
     caller: str           # who ran the latest round
+    revisions: u256       # how many times the owner has rewritten the page since the first review
+    cleared_at: u256      # when a round first cleared the job, 0 while it has not
 
 
 @allow_storage
@@ -82,6 +85,10 @@ class Check:
     grade: str
     reason: str
     created_at: u256
+    revision: u256        # 0 for a plain review, 1..MAX_REVISIONS for a rewrite
+    fixed: str            # canonical JSON: numbers violated before, right in this round
+    remaining: str        # canonical JSON: numbers still violated after this round
+    introduced: str       # canonical JSON: numbers this round newly flags
 
 
 class GlossaryGuard(gl.Contract):
@@ -286,6 +293,9 @@ class GlossaryGuard(gl.Contract):
             "fluency": check.fluency, "violations": json.loads(check.violations),
             "violation_count": int(check.violation_count), "grade": check.grade,
             "reason": check.reason, "created_at": int(check.created_at),
+            "revision": int(check.revision), "fixed": json.loads(check.fixed),
+            "remaining": json.loads(check.remaining),
+            "introduced": json.loads(check.introduced),
         }
 
     def _history(self, job: Job) -> list:
@@ -323,6 +333,7 @@ class GlossaryGuard(gl.Contract):
             created_at=u256(int(_dt.datetime.now(_dt.timezone.utc).timestamp())),
             checks=u256(0), grade="", fluency="", violations="[]",
             violation_count=u256(0), reason="", caller="",
+            revisions=u256(0), cleared_at=u256(0),
         )
         self.jobs[job_id] = job
         self.job_ids.append(job_id)
@@ -343,6 +354,7 @@ class GlossaryGuard(gl.Contract):
         numbers = verdict["violations"]
         grade = self._grade(len(numbers), verdict["fluency"])
         seq = int(job.checks) + 1
+        now = int(_dt.datetime.now(_dt.timezone.utc).timestamp())
         check = Check(
             seq=u256(seq),
             job_id=job.id,
@@ -352,7 +364,9 @@ class GlossaryGuard(gl.Contract):
             violation_count=u256(len(numbers)),
             grade=grade,
             reason=verdict["reason"],
-            created_at=u256(int(_dt.datetime.now(_dt.timezone.utc).timestamp())),
+            created_at=u256(now),
+            revision=u256(int(job.revisions)),
+            fixed="[]", remaining=self._canonical(numbers), introduced="[]",
         )
         self.checks[f"{job.id}#{seq}"] = check
 
@@ -363,8 +377,82 @@ class GlossaryGuard(gl.Contract):
         job.violation_count = check.violation_count
         job.reason = check.reason
         job.caller = check.caller
+        if grade == PASS and int(job.cleared_at) == 0:
+            job.cleared_at = u256(now)
         self.jobs[job.id] = job
         return self._check_dict(check)
+
+    @gl.public.write
+    def revise_job(self, job_id: str, new_target_text: str) -> dict:
+        """The owner rewrites the page; one round says which terms the rewrite fixed.
+
+        A review is only useful if the fix is verified. The contract keeps the
+        glossary fixed, reads the new page, and reports the set arithmetic between
+        the two rounds: fixed, still wrong, and newly broken. Nothing is guessed
+        from the text of the rewrite.
+        """
+        job = self._load(job_id)
+        if self._sender() != job.owner:
+            raise gl.vm.UserError("only the job owner can revise the page")
+        if int(job.checks) == 0:
+            raise gl.vm.UserError("review the page before revising it")
+        if job.grade == PASS:
+            raise gl.vm.UserError("this job is already cleared, there is nothing to fix")
+        if int(job.revisions) >= MAX_REVISIONS:
+            raise gl.vm.UserError(f"this job has used its {MAX_REVISIONS} revisions")
+        if not isinstance(new_target_text, str) or len(new_target_text.strip()) == 0:
+            raise gl.vm.UserError("a revision needs the rewritten translation")
+        if len(new_target_text) > MAX_TEXT_CHARS:
+            raise gl.vm.UserError(
+                f"the translation is longer than {MAX_TEXT_CHARS} characters")
+        if new_target_text.strip() == job.target_text:
+            raise gl.vm.UserError("the revision is identical to the current translation")
+
+        verdict = self._review(json.loads(job.terms), job.source_text, new_target_text.strip())
+        numbers = verdict["violations"]
+        grade = self._grade(len(numbers), verdict["fluency"])
+
+        before = json.loads(job.violations)
+        fixed = [n for n in before if n not in numbers]
+        introduced = [n for n in numbers if n not in before]
+
+        now = int(_dt.datetime.now(_dt.timezone.utc).timestamp())
+        seq = int(job.checks) + 1
+        revision = int(job.revisions) + 1
+        check = Check(
+            seq=u256(seq),
+            job_id=job.id,
+            caller=self._sender(),
+            fluency=verdict["fluency"],
+            violations=self._canonical(numbers),
+            violation_count=u256(len(numbers)),
+            grade=grade,
+            reason=verdict["reason"],
+            created_at=u256(now),
+            revision=u256(revision),
+            fixed=self._canonical(fixed),
+            remaining=self._canonical(numbers),
+            introduced=self._canonical(introduced),
+        )
+        self.checks[f"{job.id}#{seq}"] = check
+
+        job.checks = u256(seq)
+        job.revisions = u256(revision)
+        job.target_text = new_target_text.strip()
+        job.grade = grade
+        job.fluency = check.fluency
+        job.violations = check.violations
+        job.violation_count = check.violation_count
+        job.reason = check.reason
+        job.caller = check.caller
+        if grade == PASS and int(job.cleared_at) == 0:
+            job.cleared_at = u256(now)
+        self.jobs[job.id] = job
+
+        out = self._check_dict(check)
+        out["cleared"] = grade == PASS
+        out["revisions"] = revision
+        return out
 
     # -------------------------------------------------------------------- views
 
@@ -373,6 +461,7 @@ class GlossaryGuard(gl.Contract):
         job = self._load(job_id)
         terms = json.loads(job.terms)
         checked = int(job.checks) > 0
+        last = self.checks.get(f"{job.id}#{int(job.checks)}") if checked else None
         return {
             "id": job.id, "owner": job.owner, "terms": terms, "term_count": len(terms),
             "source_text": job.source_text, "target_text": job.target_text,
@@ -383,6 +472,11 @@ class GlossaryGuard(gl.Contract):
             "reason": job.reason, "caller": job.caller,
             "cleared": checked and job.grade == PASS,
             "created_at": int(job.created_at),
+            "revisions": int(job.revisions), "cleared_at": int(job.cleared_at),
+            "can_revise": checked and job.grade != PASS and int(job.revisions) < MAX_REVISIONS,
+            "last_fixed": json.loads(last.fixed) if last is not None else [],
+            "last_remaining": json.loads(last.remaining) if last is not None else [],
+            "last_introduced": json.loads(last.introduced) if last is not None else [],
         }
 
     @gl.public.view
